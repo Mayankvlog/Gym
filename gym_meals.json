@@ -1,0 +1,22 @@
+[
+    {"name": "Grilled Chicken Salad", "category": "Protein"},
+    {"name": "Quinoa Bowl", "category": "Carbohydrates"},
+    {"name": "Salmon with Vegetables", "category": "Protein"},
+    {"name": "Smoothie with Berries", "category": "Carbohydrates"},
+    {"name": "Oatmeal with Nuts", "category": "Carbohydrates"},
+    {"name": "Chicken Breast with Sweet Potato", "category": "Protein"},
+    {"name": "Egg White Omelette with Spinach", "category": "Protein"},
+    {"name": "Tuna Salad", "category": "Protein"},
+    {"name": "Whole Wheat Pasta with Pesto", "category": "Carbohydrates"},
+    {"name": "Brown Rice and Black Beans", "category": "Carbohydrates"},
+    {"name": "Stir-Fried Tofu with Vegetables", "category": "Protein"},
+    {"name": "Greek Yogurt with Granola", "category": "Protein"},
+    {"name": "Cottage Cheese with Pineapple", "category": "Protein"},
+    {"name": "Turkey and Avocado Wrap", "category": "Protein"},
+    {"name": "Shrimp Stir-Fry with Broccoli", "category": "Protein"},
+    {"name": "Sweet Potato and Chickpea Curry", "category": "Carbohydrates"},
+    {"name": "Steak with Asparagus", "category": "Protein"},
+    {"name": "Vegetarian Burrito Bowl", "category": "Carbohydrates"},
+    {"name": "Egg and Spinach Breakfast Wrap", "category": "Protein"},
+    {"name": "Mango Chicken Salad", "category": "Protein"}
+]
