@@ -26,7 +26,7 @@ def insert_user(username, password):
 
 # Function to check login credentials
 def check_login(username, password):
-    conn = sqlite3.connect('gym.db')
+    conn = sqlite3.connect('gym_app.db')
     c = conn.cursor()
     hashed_password = hashlib.sha256(password.encode()).hexdigest()  # Hash the password
     c.execute("SELECT * FROM Users WHERE username=? AND password=?", (username, hashed_password))
@@ -94,6 +94,25 @@ elif page == "Pricing" and authenticated:
     st.write("- Basic Plan: $10/month")
     st.write("- Premium Plan: $20/month")
     st.write("- Ultimate Plan: $30/month")
+
+    # Add payment form
+    st.write("### Payment Information")
+    payment_method = st.radio("Select Payment Method", ["Credit Card", "UPI"])
+
+    if payment_method == "Credit Card":
+        credit_card_number = st.text_input("Credit Card Number", type="password")
+        expiration_date = st.text_input("Expiration Date (MM/YY)", type="password")
+        cvv = st.text_input("CVV", type="password")
+
+        if st.button("Make Payment"):
+            # Process payment logic goes here
+            st.success("Payment successful!")
+
+    elif payment_method == "UPI":
+        upi_id = st.text_input("UPI ID")
+        if st.button("Make Payment"):
+            # Process UPI payment logic goes here
+            st.success("Payment successful!")
 
 # Sign Up page
 elif page == "Sign Up":
