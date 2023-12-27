@@ -1,4 +1,4 @@
 # Gym
 
 
-streamlit run app.py
+streamlit run main.py
