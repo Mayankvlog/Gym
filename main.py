@@ -85,7 +85,8 @@ elif page == "Meal List" and authenticated:
     # Display meal list
     st.write("### Meal List")
     for meal in meals:
-        st.write(f"- {meal['name']} (Category: {meal['category']}")
+        #st.write(f"- {meal['name']} (Category: {meal['category']}")
+        st.write(f"- {meal[0]} (Category: {meal[1]})")
 
 # Pricing page
 elif page == "Pricing" and authenticated:
@@ -127,7 +128,7 @@ elif page == "Sign Up":
 # Login page
 elif page == "Login":
     st.title("Login")
-    username = st.text_input("Username")
+    username = st.text_input("Username/e-mail")
     password = st.text_input("Password", type="password", key="login")
     if st.button("Login"):
         # Check user credentials
