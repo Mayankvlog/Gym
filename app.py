@@ -1,220 +1,172 @@
 import pandas as pd
 import numpy as np
-import pymongo
-import uuid
+import pickle
 import streamlit as st
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import NearestNeighbors
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import Input, Embedding, LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping
+import tensorflow as tf
+from pymongo import MongoClient
 
-# ================== Load Dataset ==================
-df = pd.read_csv("megaGymDataset3.csv")[['Title', 'Desc']].dropna()
-all_words = set(" ".join(df['Desc'].str.lower()).split())
-vocab = {word: i for i, word in enumerate(all_words)}
+# ========== MongoDB Atlas Setup ==========
+MONGODB_URI = "mongodb+srv://mayankkr0311:mala@cluster0.yuxpwgl.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+client = MongoClient(MONGODB_URI)
+db = client['MegaGymData']
+collection = db['user_queries']
 
-# ================== BOW Embedder ==================
-def embed(text):
-    vec = np.zeros(len(vocab))
-    for word in text.lower().split():
-        if word in vocab:
-            vec[vocab[word]] += 1
-    return vec
+def save_to_mongodb(title, context, generated_desc):
+    doc = {
+        'title': title,
+        'context': context,
+        'generated_description': generated_desc
+    }
+    collection.insert_one(doc)
 
-# ================== Matrix Embedder ==================
-def advanced_matrix_embed(query_vec, doc_texts):
-    doc_matrix = np.array([embed(doc) for doc in doc_texts])
-    query_mat = np.tile(query_vec, (doc_matrix.shape[0], 1))
-    combined_matrix = np.hstack([
-        query_mat,
-        doc_matrix,
-        query_mat * doc_matrix,
-        np.abs(query_mat - doc_matrix)
-    ])
-    return combined_matrix
+# ========== Load and Prepare Data ==========
+@st.cache_data(show_spinner=False)
+def load_and_prepare():
+    df = pd.read_csv('megaGymDataset3.csv')
+    df = df.dropna(subset=['Title', 'Desc'])
+    df['Desc'] = 'startseq ' + df['Desc'].astype(str) + ' endseq'
+    df['context'] = df['Type'].fillna('') + ' ' + df['BodyPart'].fillna('') + ' ' + df['Equipment'].fillna('') + ' ' + df['Level'].fillna('')
+    return df
 
-# ================== MongoDB Setup ==================
-client = pymongo.MongoClient("mongodb+srv://mayankkr0311:mala@cluster0.yuxpwgl.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-collection = client["MegaGymData"]["Gym"]
+df = load_and_prepare()
 
-if collection.count_documents({}) == 0:
-    for _, row in df.iterrows():
-        collection.insert_one({
-            "_id": str(uuid.uuid4()),
-            "title": row['Title'],
-            "desc": row['Desc'],
-            "embedding": embed(row['Desc']).tolist()
-        })
+# ========== Retriever ==========
+vectorizer = TfidfVectorizer(max_features=500)
+tfidf_matrix = vectorizer.fit_transform((df['Title'] + ' ' + df['context']).astype(str))
+retriever = NearestNeighbors(n_neighbors=1, metric='cosine').fit(tfidf_matrix)
 
-# ================== Neural Network Retriever ==================
-class NeuralRetriever:
-    def __init__(self, input_dim, hidden_dims=[512, 256, 128, 64]):
-        self.layer_dims = [input_dim] + hidden_dims + [1]
-        self.weights = [
-            np.random.randn(self.layer_dims[i], self.layer_dims[i+1]) *
-            np.sqrt(2. / (self.layer_dims[i] + self.layer_dims[i+1])) 
-            for i in range(len(self.layer_dims) - 1)
-        ]
-        self.biases = [np.zeros(self.layer_dims[i+1]) for i in range(len(self.layer_dims) - 1)]
+def retrieve_similar_desc(title, context):
+    query = title + ' ' + context
+    X_query = vectorizer.transform([query])
+    idx = retriever.kneighbors(X_query, return_distance=False)[0][0]
+    return df.iloc[idx]['Desc']
 
-    def relu(self, x):
-        return np.maximum(0, x)
-    
-    def relu_activation(self, x):
-        return np.maximum(0, x)
-    
-    def relu_deriv(self, x):
-        return (x > 0).astype(float)
-    
-    def relu_deriv_activation(self, x):
-        return (x > 0).astype(float)
-    
-    def leaky_relu(self, x, alpha=0.01):    
-        return np.where(x > 0, x, alpha * x)
-    
-    def leaky_relu_activation(self, x, alpha=0.01):   
-        return np.where(x > 0, x, alpha * x)
-    
-    def tanh(self, x):
-        return np.tanh(x)
-    
-    def tanh_activation(self, x):   
-        return np.tanh(x)
-    
-    def tanh_deriv(self, x):
-        return 1.0 - np.tanh(x) ** 2        
-    
-    def tanh_deriv_activation(self, x):
-        return 1.0 - np.tanh(x) ** 2
+# ========== Tokenization ==========
+input_tokenizer = Tokenizer(oov_token='<OOV>')
+desc_tokenizer = Tokenizer(oov_token='<OOV>')
 
-    def tanh_deriv_activation(self, x):
-        return 1.0 - np.tanh(x) ** 2
+df['encoder_input'] = df['Title'].astype(str) + ' ' + df['Desc'].astype(str)
+input_tokenizer.fit_on_texts(df['encoder_input'])
+desc_tokenizer.fit_on_texts(df['Desc'])
 
-    def sigmoid(self, x):
-        return 1 / (1 + np.exp(-x))
-    
-    def sigmoid_activation(self, x):
-        return 1 / (1 + np.exp(-x)) 
-    
-    def softmax(self, x):    
-        exp_x = np.exp(x - np.max(x))
-        return exp_x / np.sum(exp_x)
-    
-    def softmax_activation(self, x):        
-        exp_x = np.exp(x - np.max(x))
-        return exp_x / np.sum(exp_x)
-    
-    def  cross_entropy_loss(self, y_true, y_pred):
-        epsilon = 1e-15
-        return -np.mean(y_true * np.log(y_pred + epsilon) + (1 - y_true) * np.log(1 - y_pred + epsilon))    
-    
-    def cross_entropy_loss_activation(self, y_true, y_pred):
-        epsilon = 1e-15
-        return -np.mean(y_true * np.log(y_pred + epsilon) + (1 - y_true) * np.log(1 - y_pred + epsilon))
-    
-    def mean_squared_error(self, y_true, y_pred):
-        return np.mean((y_true - y_pred) ** 2)
-    
-    def mean_squared_error_activation(self, y_true, y_pred):
-        return np.mean((y_true - y_pred) ** 2)  
+max_input_len = 60
+max_desc_len = 50
+input_vocab_size = len(input_tokenizer.word_index) + 1
+desc_vocab_size = len(desc_tokenizer.word_index) + 1
 
+encoder_input_seqs = input_tokenizer.texts_to_sequences(df['encoder_input'])
+desc_seqs = desc_tokenizer.texts_to_sequences(df['Desc'])
+encoder_input_seqs = pad_sequences(encoder_input_seqs, maxlen=max_input_len, padding='post')
+desc_seqs = pad_sequences(desc_seqs, maxlen=max_desc_len, padding='post')
 
-    def forward(self, x_batch):
-        self.activations = [x_batch]
-        self.z_values = []
-        for i in range(len(self.weights) - 1):
-            z = np.dot(self.activations[-1], self.weights[i]) + self.biases[i]
-            self.z_values.append(z)
-            self.activations.append(self.relu(z))
-        z = np.dot(self.activations[-1], self.weights[-1]) + self.biases[-1]
-        self.z_values.append(z)
-        self.activations.append(self.sigmoid(z))
-        return self.activations[-1]
+# ========== Model Definition ==========
+@st.cache_resource(show_spinner=False)
+def load_or_train_model():
+    try:
+        model = load_model('gym.h5')
+        with open('input_tokenizer.pkl', 'rb') as f:
+            input_tok = pickle.load(f)
 
-    def backward(self, x_batch, y_true, y_pred, lr=0.01):
-        m = y_true.shape[0]
-        delta = 2 * (y_pred - y_true) * y_pred * (1 - y_pred) / m
-        for i in reversed(range(len(self.weights))):
-            a_prev = self.activations[i]
-            dW = np.dot(a_prev.T, delta)
-            db = np.sum(delta, axis=0)
-            self.weights[i] -= lr * dW
-            self.biases[i] -= lr * db
-            if i != 0:
-                delta = np.dot(delta, self.weights[i].T) * self.relu_deriv(self.z_values[i - 1])
+        with open('desc_tokenizer.pkl', 'rb') as f:
+            desc_tok = pickle.load(f)
+        return model, input_tok, desc_tok
+    except Exception:
 
-    def score(self, query_vec, embeddings):
-        scores = []
-        for emb in embeddings:
-            input_vec = np.hstack([
-                query_vec,
-                emb,
-                query_vec * emb,
-                np.abs(query_vec - emb)
-            ])
-            score = self.forward(input_vec.reshape(1, -1))
-            scores.append(score[0])
-        return scores
-
-# ================== Generate Training Data ==================
-def generate_training_data(docs, num_negatives=2):
-    data = []
-    for doc in docs:
-        query = doc["desc"]
-        data.append((query, doc["desc"], 1))  # Positive pair
-
-        # Negative samples
-        negatives = np.random.choice(
-            [d for d in docs if d["_id"] != doc["_id"]],
-            size=min(num_negatives, len(docs)-1),
-            replace=False
+        # Train model if not found
+        X_enc_train, X_enc_test, y_desc_train, y_desc_test = train_test_split(
+            encoder_input_seqs, desc_seqs, test_size=0.1, random_state=42
         )
-        for neg_doc in negatives:
-            data.append((query, neg_doc["desc"], 0))  # Negative pair
-    return data
+        encoder_input_layer = Input(shape=(max_input_len,), name='encoder_input')
+        x = Embedding(input_dim=input_vocab_size, output_dim=128, mask_zero=True)(encoder_input_layer)
+        x = Bidirectional(LSTM(64, return_sequences=True, activation='tanh'))(x)
+        x = LSTM(64, return_sequences=True, activation='relu')(x)
+        x = Dropout(0.2)(x)
+        x = LSTM(32, return_sequences=True, activation='sigmoid')(x)
+        x = LSTM(32, return_sequences=True, activation='elu')(x)
+        encoder_output, state_h, state_c = LSTM(32, return_state=True, activation='relu')(x)
 
-# ================== Training Function ==================
-def train_retriever(retriever, train_data, batch_size=2, epochs=10, lr=0.01):
-    for epoch in range(epochs):
-        np.random.shuffle(train_data)
-        total_loss = 0
-        for i in range(0, len(train_data), batch_size):
-            batch = train_data[i:i+batch_size]
-            for query, doc, label in batch:
-                query_vec = embed(query)
-                doc_vec = embed(doc)
-                input_vec = np.hstack([
-                    query_vec,
-                    doc_vec,
-                    query_vec * doc_vec,
-                    np.abs(query_vec - doc_vec)
-                ])
-                x_batch = np.array([input_vec])
-                y_true = np.array([[label]])
-                y_pred = retriever.forward(x_batch)
-                retriever.backward(x_batch, y_true, y_pred, lr=lr)
-                total_loss += np.mean((label - y_pred) ** 2)
-        print(f"Epoch {epoch+1}, Loss: {total_loss:.4f}")
+        decoder_input = Input(shape=(max_desc_len,), name='decoder_input')
+        decoder_embedding = Embedding(input_dim=desc_vocab_size, output_dim=128, mask_zero=True)(decoder_input)
+        y = LSTM(32, return_sequences=True, activation='tanh')(decoder_embedding, initial_state=[state_h, state_c])
+        y = Dropout(0.2)(y)
+        y = LSTM(32, return_sequences=True, activation='relu')(y)
+        output = Dense(desc_vocab_size, activation='softmax')(y)
 
-# ================== Train on Real Data ==================
-docs = list(collection.find({}))
-train_data = generate_training_data(docs)
-retriever = NeuralRetriever(input_dim=len(vocab) * 4)
-train_retriever(retriever, train_data)
+        model = Model([encoder_input_layer, decoder_input], output)
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-# ================== Streamlit UI ==================
-st.set_page_config(page_title="Gym AI Assistant", page_icon="🏋️")
-st.title("🏋️‍♀️ Gym Workout Trainer")
+        decoder_input_data = np.zeros_like(y_desc_train)
+        decoder_input_data[:, 1:] = y_desc_train[:, :-1]
+        decoder_input_data[:, 0] = desc_tokenizer.word_index.get('startseq', 0)
+        decoder_target_data = tf.keras.utils.to_categorical(y_desc_train, num_classes=desc_vocab_size)
 
-query_input = st.text_input("Enter your fitness query:")
+        early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        history = model.fit([X_enc_train, decoder_input_data], decoder_target_data,
+                            batch_size=32, epochs=300, validation_split=0.1, callbacks=[early_stop])
+        model.save('gym.h5')
+        with open('input_tokenizer.pkl', 'wb') as f:
+            pickle.dump(input_tokenizer, f)
+        with open('desc_tokenizer.pkl', 'wb') as f:
+            pickle.dump(desc_tokenizer, f)
+        return model, input_tokenizer, desc_tokenizer
 
-if st.button("Retrieve Best Match"):
-    docs = list(collection.find({}))
-    if len(docs) == 0:
-        st.warning("No documents found in the database.")
+model, input_tokenizer, desc_tokenizer = load_or_train_model()
+
+# ========== Inference ==========
+def sample_with_temperature(preds, temperature=1.0):
+    preds = np.asarray(preds).astype('float64')
+    preds = np.log(preds + 1e-8) / temperature
+    exp_preds = np.exp(preds)
+    preds = exp_preds / np.sum(exp_preds)
+    probas = np.random.multinomial(1, preds, 1)
+    return np.argmax(probas)
+
+def generate_description(input_title, input_context, max_gen_len=50, temperature=0.8):
+    retrieved_desc = retrieve_similar_desc(input_title, input_context)
+    encoder_input_text = input_title + ' ' + retrieved_desc
+    encoder_input_seq = input_tokenizer.texts_to_sequences([encoder_input_text])
+    encoder_input_seq = pad_sequences(encoder_input_seq, maxlen=max_input_len, padding='post')
+    decoder_input_inf = np.zeros((1, max_desc_len))
+    decoder_input_inf[0, 0] = desc_tokenizer.word_index.get('startseq', 0)
+    generated_sequence = []
+    for i in range(1, max_gen_len):
+        predictions = model.predict([encoder_input_seq, decoder_input_inf], verbose=0)
+        preds = predictions[0, i-1, :]
+        predicted_word_index = sample_with_temperature(preds, temperature)
+        if predicted_word_index == desc_tokenizer.word_index.get('endseq', -1) or predicted_word_index == 0:
+            break
+        generated_sequence.append(predicted_word_index)
+        if i < max_desc_len:
+            decoder_input_inf[0, i] = predicted_word_index
+    inv_desc_index = {v: k for k, v in desc_tokenizer.word_index.items()}
+    generated_desc = ' '.join([inv_desc_index.get(idx, '') for idx in generated_sequence if idx > 0])
+    return generated_desc
+
+# ========== Streamlit UI ==========
+st.title("🏋️‍♂️ Gym Exercise Assistant")
+
+with st.form("desc_form"):
+    title_input = st.text_input("Enter Exercise Title", value="abs exercise in 3 days")
+    context_input = st.text_input("Enter Context (Type, BodyPart, Equipment, Level)", value="Strength abs Dumbbell advanced")
+    submitted = st.form_submit_button("Generate Description")
+
+if submitted:
+    if title_input and context_input:
+        with st.spinner("Generating..."):
+            generated_desc = generate_description(title_input, context_input)
+            st.markdown("**Generated Description:**")
+            st.write(generated_desc)
+            save_to_mongodb(title_input, context_input, generated_desc)
+            st.success("Description saved to MongoDB Atlas.")
     else:
-        doc_texts = [doc['desc'] for doc in docs]
-        query_vec = embed(query_input)
-        combined_matrix = advanced_matrix_embed(query_vec, doc_texts)
-        scores = retriever.forward(combined_matrix)
-        top_idx = np.argmax(scores)
-        top_doc = docs[top_idx]
-        st.subheader("🏆 Top Result")
-        st.write(f"**Title:** {top_doc['title']}")
-        st.write(f"**Description:** {top_doc['desc']}")
+        st.warning("Please provide both title and context.")
+
+
